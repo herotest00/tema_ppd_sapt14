@@ -5,6 +5,7 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
+
 #define PIXEL double
 
 typedef struct _BITMAP{
@@ -66,12 +67,13 @@ PIXEL applyFilter(PBITMAP image, PBITMAP kernel, int offset)
 __global__
 void gaussian_filter(PBITMAP image, PBITMAP kernel, PBITMAP result) 
 {
-    int rest = (image->width * image->height) % blockDim.x, cat = image->width * image->height / blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+    int rest = (image->width * image->height) % stride, cat = image->width * image->height / stride;
     int threadId = blockDim.x * blockIdx.x + threadIdx.x;
-    int start = cat * threadIdx.x + _min(threadId, rest);
+    int start = cat * threadId + _min(threadId, rest);
     int extra = 0;
 
-    if (threadId < (image->width * image->height) % blockDim.x) {
+    if (threadId < (image->width * image->height) % stride) {
         extra = 1;
     }
 
@@ -105,51 +107,58 @@ int readMatrix(PBITMAP& matrix, std::ifstream& fin) {
 
 int main(int argc, char** argv)
 {
-    int byte, status = 0;
+    int status = 0;
     std::string filename;
     std::ifstream fin;
     std::ofstream fout;
     PBITMAP image = NULL, kernel = NULL, result = NULL;
 
-    if (argc < 2) {
-        std::cout << "Usage: program filename" << std::endl;
+    if (argc < 3) {
+        std::cout << "Usage: program filename no_threads\n";
         return -1;
     }
     filename = argv[1];
 
     fin.open(filename);
     if (!fin.is_open()) {
-        std::cout << "Couldn't open file " + filename << std::endl;
+        std::cout << "Couldn't open file " + filename + "\n";
         goto cleanup;
     }
 
     if ((status = readMatrix(image, fin)) < 0) {
-        std::cout << "Error reading image" << std::endl;
+        std::cout << "Error reading image\n";
         goto cleanup;
     }
 
     if ((status = readMatrix(kernel, fin)) < 0) {
-        std::cout << "Error reading kernel" << std::endl;
+        std::cout << "Error reading kernel\n";
         goto cleanup;
     }
 
     if (cudaMallocManaged(&result, sizeof(PBITMAP)) != cudaSuccess) {
-        std::cout << "Error allocating result image" << std::endl;
+        std::cout << "Error allocating result image\n";
         goto cleanup;
     }
     if (cudaMallocManaged(&result->bytes, sizeof(PIXEL) * image->height * image->width) != cudaSuccess) {
-        std::cout << "Error allocating result image" << std::endl;
+        std::cout << "Error allocating result image\n";
         goto cleanup;
     }
     result->height = image->height;
     result->width = image->width;
 
-    gaussian_filter<<<1, 256>>>(image, kernel, result);
+    int noThreads = atoi(argv[2]);
+    int noBlocks = (image->height * image->width + noThreads - 1) / noThreads;
+
+    const clock_t beginTime = clock();
+
+    gaussian_filter<<<noBlocks, noThreads>>>(image, kernel, result);
     cudaDeviceSynchronize();
+
+    std::cout << 1000.0 * (float(clock() - beginTime) / CLOCKS_PER_SEC);
 
     fout.open("output.txt");
     if (!fout.is_open()) {
-        std::cout << "Couldn't open/create output file " << std::endl;
+        std::cout << "Couldn't open/create output file\n";
         goto cleanup;
     }
 
